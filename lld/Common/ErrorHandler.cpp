@@ -139,8 +139,8 @@ void ErrorHandler::log(const Twine &msg) {
 
 void ErrorHandler::message(const Twine &msg) {
   std::lock_guard<std::mutex> lock(mu);
-  outs() << msg << "\n";
-  outs().flush();
+  *errorOS << msg << "\n";
+  errorOS->flush();
 }
 
 void ErrorHandler::warn(const Twine &msg) {

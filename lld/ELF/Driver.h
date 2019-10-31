@@ -29,6 +29,7 @@ public:
   void main(ArrayRef<const char *> args);
   void addFile(StringRef path, bool withLOption);
   void addLibrary(StringRef name);
+  void iterateSymbols(void* state, void (*iter)(void*, const char *));
 
 private:
   void createFiles(llvm::opt::InputArgList &args);

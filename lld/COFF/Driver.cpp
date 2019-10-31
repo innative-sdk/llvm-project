@@ -169,6 +169,54 @@ MemoryBufferRef LinkerDriver::takeBuffer(std::unique_ptr<MemoryBuffer> mb) {
   return mbref;
 }
 
+bool iterateSymbols(const char *path, void (*iter)(void *, const char *),
+                    void *state, llvm::raw_ostream &diag) {
+  errorHandler().logName = args::getFilenameWithoutExe(path);
+  errorHandler().errorOS = &diag;
+  errorHandler().errorLimitExceededMsg =
+      "too many errors emitted, stopping now"
+      " (use /errorlimit:0 to see all errors)";
+  errorHandler().exitEarly = false;
+
+  auto future =
+      std::make_shared<std::future<MBErrPair>>(createFutureForFile(path));
+  auto MBOrErr = future->get();
+  if (MBOrErr.second)
+    error("could not open " + std::string(path) + ": " +
+          MBOrErr.second.message());
+  else {
+    config = make<Configuration>();
+    symtab = make<SymbolTable>();
+    assert(symtab != 0);
+    MemoryBufferRef mbref = *MBOrErr.first;
+    make<std::unique_ptr<MemoryBuffer>>(std::move(MBOrErr.first));
+
+    // File type is detected by contents, not by file extension.
+    switch (identify_magic(mbref.getBuffer())) {
+    case file_magic::archive:
+      symtab->addFile(make<ArchiveFile>(mbref));
+      break;
+    case file_magic::bitcode:
+      symtab->addFile(make<BitcodeFile>(mbref, "", 0));
+      break;
+    case file_magic::coff_object:
+    case file_magic::coff_import_library:
+      symtab->addFile(make<ObjFile>(mbref));
+      break;
+    default:
+      error(mbref.getBufferIdentifier() + ": unknown file type");
+      return false;
+    }
+
+    symtab->forEachSymbol(
+        [iter, state](Symbol *s) { (*iter)(state, s->getName().str().c_str()); });
+
+    freeArena();
+  }
+
+  return true;
+}
+
 void LinkerDriver::addBuffer(std::unique_ptr<MemoryBuffer> mb,
                              bool wholeArchive) {
   StringRef filename = mb->getBufferIdentifier();

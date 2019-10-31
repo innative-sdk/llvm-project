@@ -277,6 +277,44 @@ void LinkerDriver::addLibrary(StringRef name) {
     error("unable to find library -l" + name);
 }
 
+void LinkerDriver::iterateSymbols(void *state,
+                                  void (*iter)(void *, const char *)) {
+  for (size_t i = 0; i < files.size(); ++i)
+    parseFile(files[i]);
+
+  symtab->forEachSymbol(
+      [iter, state](Symbol *s) { (*iter)(state, s->getName().str().c_str()); });
+}
+
+bool iterateSymbols(const char *path, void (*iter)(void *, const char *),
+                    void *state, llvm::raw_ostream &diag) {
+  errorHandler().logName = args::getFilenameWithoutExe(path);
+  errorHandler().errorLimitExceededMsg =
+      "too many errors emitted, stopping now (use "
+      "-error-limit=0 to see all errors)";
+  errorHandler().errorOS = &diag;
+  errorHandler().exitEarly = false;
+
+  inputSections.clear();
+  outputSections.clear();
+  binaryFiles.clear();
+  bitcodeFiles.clear();
+  objectFiles.clear();
+  sharedFiles.clear();
+
+  config = make<Configuration>();
+  driver = make<LinkerDriver>();
+  script = make<LinkerScript>();
+  symtab = make<SymbolTable>();
+  assert(symtab != 0);
+  driver->addFile(path, false);
+  driver->iterateSymbols(state, iter);
+
+  freeArena();
+
+  return true;
+}
+
 // This function is called on startup. We need this for LTO since
 // LTO calls LLVM functions to compile bitcode files to native code.
 // Technically this can be delayed until we read bitcode files, but

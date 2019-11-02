@@ -175,6 +175,7 @@ bool iterateSymbols(const char *path, void (*iter)(void *, const char *),
                     void *state, llvm::raw_ostream &diag) {
   errorHandler().logName = args::getFilenameWithoutExe(path);
   errorHandler().errorOS = &diag;
+  errorHandler().colorDiagnostics = diag.has_colors();
   errorHandler().errorLimitExceededMsg =
       "too many errors emitted, stopping now"
       " (use /errorlimit:0 to see all errors)";
@@ -210,11 +211,11 @@ bool iterateSymbols(const char *path, void (*iter)(void *, const char *),
       return false;
     }
 
-    symtab->forEachSymbol(
-        [iter, state](Symbol *s) { (*iter)(state, s->getName().str().c_str()); });
-
-    freeArena();
+    symtab->forEachSymbol([iter, state](Symbol *s) {
+      (*iter)(state, s->getName().str().c_str());
+    });
   }
+  freeArena();
 
   return true;
 }

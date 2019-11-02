@@ -85,6 +85,7 @@ bool link(ArrayRef<const char *> args, bool canExitEarly, raw_ostream &diag) {
   BitcodeFile::instances.clear();
   memset(MergeChunk::instances, 0, sizeof(MergeChunk::instances));
   OutputSection::clearOutputSections();
+  clearTypeServerSourceInstances();
   return !errorCount();
 }
 

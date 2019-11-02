@@ -90,6 +90,8 @@ public:
 };
 } // namespace
 
+void lld::coff::clearTypeServerSourceInstances() { TypeServerSource::instances.clear(); }
+
 static std::vector<std::unique_ptr<TpiSource>> GC;
 
 TpiSource::TpiSource(TpiKind k, const ObjFile *f) : kind(k), file(f) {

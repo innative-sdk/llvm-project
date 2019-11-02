@@ -82,6 +82,8 @@ static const int numberOfDataDirectory = 16;
 // this can be indexed by Chunk::getOutputSection.
 static std::vector<OutputSection *> outputSections;
 
+void OutputSection::clearOutputSections() { outputSections.clear(); }
+
 OutputSection *Chunk::getOutputSection() const {
   return osidx == 0 ? nullptr : outputSections[osidx - 1];
 }

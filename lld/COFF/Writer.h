@@ -75,6 +75,8 @@ public:
 
   std::vector<PartialSection *> contribSections;
 
+  static void clearOutputSections();
+
 private:
   uint32_t stringTableOff = 0;
 };

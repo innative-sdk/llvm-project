@@ -286,7 +286,7 @@ void LinkerDriver::iterateSymbols(void *state,
       [iter, state](Symbol *s) { (*iter)(state, s->getName().str().c_str()); });
 }
 
-bool iterateSymbols(const char *path, void (*iter)(void *, const char *),
+bool lld::elf::iterateSymbols(const char *path, void (*iter)(void *, const char *),
                     void *state, llvm::raw_ostream &diag) {
   errorHandler().logName = args::getFilenameWithoutExe(path);
   errorHandler().errorLimitExceededMsg =

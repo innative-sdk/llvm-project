@@ -190,6 +190,7 @@ bool iterateSymbols(const char *path, void (*iter)(void *, const char *),
   else {
     config = make<Configuration>();
     symtab = make<SymbolTable>();
+    driver = make<LinkerDriver>();
     assert(symtab != 0);
     MemoryBufferRef mbref = *MBOrErr.first;
     make<std::unique_ptr<MemoryBuffer>>(std::move(MBOrErr.first));

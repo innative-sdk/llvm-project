@@ -185,15 +185,7 @@ std::vector<std::pair<MemoryBufferRef, uint64_t>> static getArchiveMembers(
   return v;
 }
 
-// Opens a file and create a file object. Path has to be resolved already.
-void LinkerDriver::addFile(StringRef path, bool withLOption) {
-  using namespace sys::fs;
-
-  Optional<MemoryBufferRef> buffer = readFile(path);
-  if (!buffer.hasValue())
-    return;
-  MemoryBufferRef mbref = *buffer;
-
+void LinkerDriver::addMemoryBuffer(MemoryBufferRef mbref, bool withLOption) {
   if (config->formatBinary) {
     files.push_back(make<BinaryFile>(mbref));
     return;
@@ -207,12 +199,13 @@ void LinkerDriver::addFile(StringRef path, bool withLOption) {
     // Handle -whole-archive.
     if (inWholeArchive) {
       for (const auto &p : getArchiveMembers(mbref))
-        files.push_back(createObjectFile(p.first, path, p.second));
+        files.push_back(createObjectFile(p.first, mbref.getBufferIdentifier(), p.second));
       return;
     }
 
     std::unique_ptr<Archive> file =
-        CHECK(Archive::create(mbref), path + ": failed to parse archive");
+        CHECK(Archive::create(mbref),
+              mbref.getBufferIdentifier() + ": failed to parse archive");
 
     // If an archive file has no symbol table, it is likely that a user
     // is attempting LTO and using a default ar command that doesn't
@@ -224,13 +217,15 @@ void LinkerDriver::addFile(StringRef path, bool withLOption) {
       for (const std::pair<MemoryBufferRef, uint64_t> &p :
            getArchiveMembers(mbref))
         if (identify_magic(p.first.getBuffer()) != file_magic::bitcode) {
-          error(path + ": archive has no index; run ranlib to add one");
+          error(mbref.getBufferIdentifier() +
+                ": archive has no index; run ranlib to add one");
           return;
         }
 
       for (const std::pair<MemoryBufferRef, uint64_t> &p :
            getArchiveMembers(mbref))
-        files.push_back(make<LazyObjFile>(p.first, path, p.second));
+        files.push_back(
+            make<LazyObjFile>(p.first, mbref.getBufferIdentifier(), p.second));
       return;
     }
 
@@ -240,7 +235,8 @@ void LinkerDriver::addFile(StringRef path, bool withLOption) {
   }
   case file_magic::elf_shared_object:
     if (config->isStatic || config->relocatable) {
-      error("attempted static link of dynamic object " + path);
+      error("attempted static link of dynamic object " +
+            mbref.getBufferIdentifier());
       return;
     }
 
@@ -254,8 +250,9 @@ void LinkerDriver::addFile(StringRef path, bool withLOption) {
     // If a file was specified by -lfoo, the directory part is not
     // significant, as a user did not specify it. This behavior is
     // compatible with GNU.
-    files.push_back(
-        make<SharedFile>(mbref, withLOption ? path::filename(path) : path));
+    files.push_back(make<SharedFile>(
+        mbref, withLOption ? path::filename(mbref.getBufferIdentifier())
+                           : mbref.getBufferIdentifier()));
     return;
   case file_magic::bitcode:
   case file_magic::elf_relocatable:
@@ -265,8 +262,22 @@ void LinkerDriver::addFile(StringRef path, bool withLOption) {
       files.push_back(createObjectFile(mbref));
     break;
   default:
-    error(path + ": unknown file type");
+    error(mbref.getBufferIdentifier() + ": unknown file type");
   }
+}
+
+  // Opens a file and create a file object. Path has to be resolved already.
+void LinkerDriver::addFile(StringRef path, bool withLOption) {
+  using namespace sys::fs;
+
+  Optional<MemoryBufferRef> buffer = readFile(path);
+  if (!buffer.hasValue()) {
+    error(path + " could not be found or opened.");
+    return;
+  }
+  MemoryBufferRef mbref = *buffer;
+
+  addMemoryBuffer(mbref, withLOption);
 }
 
 // Add a given library by searching it from input search paths.
@@ -286,8 +297,10 @@ void LinkerDriver::iterateSymbols(void *state,
       [iter, state](Symbol *s) { (*iter)(state, s->getName().str().c_str()); });
 }
 
-bool lld::elf::iterateSymbols(const char *path, void (*iter)(void *, const char *),
-                    void *state, llvm::raw_ostream &diag) {
+bool lld::elf::iterateSymbols(const char *path, size_t size,
+                              void (*iter)(void *, const char *), void *state,
+                              std::tuple<uint8_t, uint16_t, uint8_t> settings,
+                              llvm::raw_ostream &diag) {
   errorHandler().logName = args::getFilenameWithoutExe(path);
   errorHandler().errorLimitExceededMsg =
       "too many errors emitted, stopping now (use "
@@ -306,8 +319,17 @@ bool lld::elf::iterateSymbols(const char *path, void (*iter)(void *, const char 
   driver = make<LinkerDriver>();
   script = make<LinkerScript>();
   symtab = make<SymbolTable>();
+  config->ekind = ELFKind(std::get<0>(settings));
+  config->emachine = std::get<1>(settings);
+  config->osabi = std::get<2>(settings);
   assert(symtab != 0);
-  driver->addFile(path, false);
+  
+  if (!size)
+    driver->addFile(path, false);
+  else
+    driver->addMemoryBuffer(
+        MemoryBufferRef(StringRef(path, size), "in-memory buffer"), false);
+
   driver->iterateSymbols(state, iter);
 
   freeArena();

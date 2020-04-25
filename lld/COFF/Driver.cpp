@@ -89,8 +89,71 @@ bool link(ArrayRef<const char *> args, bool canExitEarly, raw_ostream &stdoutOS,
   ImportFile::instances.clear();
   BitcodeFile::instances.clear();
   memset(MergeChunk::instances, 0, sizeof(MergeChunk::instances));
+  OutputSection::clearOutputSections();
+  clearTypeServerSourceInstances();
   return !errorCount();
 }
+
+bool iterateSymbols(const char *path, size_t size,
+                    void (*iter)(void *, const char *), void *state,
+                    raw_ostream &stdoutOS, raw_ostream &stderrOS) {
+  lld::stdoutOS = &stdoutOS;
+  lld::stderrOS = &stderrOS;
+
+  errorHandler().logName = args::getFilenameWithoutExe(path);
+  errorHandler().errorLimitExceededMsg =
+      "too many errors emitted, stopping now"
+      " (use /errorlimit:0 to see all errors)";
+  errorHandler().exitEarly = false;
+
+  std::unique_ptr<MemoryBuffer> mb;
+  MemoryBufferRef mbref;
+  if (!size) {
+    auto MBOrErr = MemoryBuffer::getFile(path, -1, false);
+    if (!MBOrErr) {
+      error("could not open " + std::string(path) + ": " +
+            MBOrErr.getError().message());
+      return false;
+    }
+    mb = std::move(*MBOrErr);
+    mbref = *mb;
+  } else {
+    mbref = MemoryBufferRef(StringRef(path, size), "");
+  }
+
+  config = make<Configuration>();
+  symtab = make<SymbolTable>();
+  driver = make<LinkerDriver>();
+  assert(symtab != 0);
+
+  // File type is detected by contents, not by file extension.
+  switch (identify_magic(mbref.getBuffer())) {
+  case file_magic::archive:
+    symtab->addFile(make<ArchiveFile>(mbref));
+    break;
+  case file_magic::bitcode:
+    symtab->addFile(make<BitcodeFile>(mbref, "", 0));
+    break;
+  case file_magic::coff_object:
+  case file_magic::coff_import_library:
+    symtab->addFile(make<ObjFile>(mbref));
+    break;
+  default:
+    error(mbref.getBufferIdentifier() + ": unknown file type");
+    return false;
+  }
+
+  symtab->forEachSymbol(
+      [iter, state](Symbol *s) { (*iter)(state, s->getName().str().c_str()); });
+
+  ObjFile::instances.clear();
+  ImportFile::instances.clear();
+  BitcodeFile::instances.clear();
+  memset(MergeChunk::instances, 0, sizeof(MergeChunk::instances));
+  freeArena();
+
+  return true;
+} // namespace coff
 
 // Parse options of the form "old;new".
 static std::pair<StringRef, StringRef> getOldNewOptions(opt::InputArgList &args,
@@ -292,8 +355,8 @@ void LinkerDriver::enqueueArchiveMember(const Archive::Child &c,
 
   auto reportBufferError = [=](Error &&e, StringRef childName) {
     fatal("could not get the buffer for the member defining symbol " +
-          toCOFFString(sym) + ": " + parentName + "(" + childName + "): " +
-          toString(std::move(e)));
+          toCOFFString(sym) + ": " + parentName + "(" + childName +
+          "): " + toString(std::move(e)));
   };
 
   if (!c.getParent()->isThin()) {
@@ -309,12 +372,12 @@ void LinkerDriver::enqueueArchiveMember(const Archive::Child &c,
     return;
   }
 
-  std::string childName = CHECK(
-      c.getFullName(),
-      "could not get the filename for the member defining symbol " +
-      toCOFFString(sym));
-  auto future = std::make_shared<std::future<MBErrPair>>(
-      createFutureForFile(childName));
+  std::string childName =
+      CHECK(c.getFullName(),
+            "could not get the filename for the member defining symbol " +
+                toCOFFString(sym));
+  auto future =
+      std::make_shared<std::future<MBErrPair>>(createFutureForFile(childName));
   enqueueTask([=]() {
     auto mbOrErr = future->get();
     if (mbOrErr.second)
@@ -653,14 +716,14 @@ static DebugKind parseDebugKind(const opt::InputArgList &args) {
     return DebugKind::Full;
 
   DebugKind debug = StringSwitch<DebugKind>(a->getValue())
-                     .CaseLower("none", DebugKind::None)
-                     .CaseLower("full", DebugKind::Full)
-                     .CaseLower("fastlink", DebugKind::FastLink)
-                     // LLD extensions
-                     .CaseLower("ghash", DebugKind::GHash)
-                     .CaseLower("dwarf", DebugKind::Dwarf)
-                     .CaseLower("symtab", DebugKind::Symtab)
-                     .Default(DebugKind::Unknown);
+                        .CaseLower("none", DebugKind::None)
+                        .CaseLower("full", DebugKind::Full)
+                        .CaseLower("fastlink", DebugKind::FastLink)
+                        // LLD extensions
+                        .CaseLower("ghash", DebugKind::GHash)
+                        .CaseLower("dwarf", DebugKind::Dwarf)
+                        .CaseLower("symtab", DebugKind::Symtab)
+                        .Default(DebugKind::Unknown);
 
   if (debug == DebugKind::FastLink) {
     warn("/debug:fastlink unsupported; using /debug:full");
@@ -910,8 +973,7 @@ static void parseOrderFile(StringRef arg) {
     if (set.count(s) == 0) {
       if (config->warnMissingOrderSymbol)
         warn("/order:" + arg + ": missing symbol: " + s + " [LNK4037]");
-    }
-    else
+    } else
       config->order[s] = INT_MIN + config->order.size();
   }
 }
@@ -997,8 +1059,8 @@ static void parsePDBAltPath(StringRef altPath) {
     else if (var.equals_lower("%_ext%"))
       buf.append(binaryExtension);
     else {
-      warn("only %_PDB% and %_EXT% supported in /pdbaltpath:, keeping " +
-           var + " as literal");
+      warn("only %_PDB% and %_EXT% supported in /pdbaltpath:, keeping " + var +
+           " as literal");
       buf.append(var);
     }
 
@@ -1862,7 +1924,8 @@ void LinkerDriver::link(ArrayRef<const char *> argsArr) {
     for (auto *arg : args.filtered(OPT_include_optional))
       if (dyn_cast_or_null<LazyArchive>(symtab->find(arg->getValue())))
         addUndefined(arg->getValue());
-    while (run());
+    while (run())
+      ;
   }
 
   if (config->mingw) {

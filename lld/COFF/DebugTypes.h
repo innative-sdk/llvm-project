@@ -46,6 +46,7 @@ TpiSource *makeUsePrecompSource(const ObjFile *f,
                                 const llvm::codeview::PrecompRecord *precomp);
 
 void loadTypeServerSource(llvm::MemoryBufferRef m);
+void clearTypeServerSourceInstances();
 
 // Temporary interface to get the dependency
 template <typename T> const T &retrieveDependencyInfo(const TpiSource *source);

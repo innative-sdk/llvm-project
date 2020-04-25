@@ -128,6 +128,10 @@ const TypeServer2Record &retrieveDependencyInfo(const TpiSource *source) {
 std::map<std::string, std::pair<std::string, TypeServerSource *>>
     TypeServerSource::instances;
 
+void lld::coff::clearTypeServerSourceInstances() {
+  TypeServerSource::instances.clear();
+}
+
 // Make a PDB path assuming the PDB is in the same folder as the OBJ
 static std::string getPdbBaseName(const ObjFile *file, StringRef tSPath) {
   StringRef localPath =

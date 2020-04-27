@@ -128,7 +128,7 @@ const TypeServer2Record &retrieveDependencyInfo(const TpiSource *source) {
 std::map<std::string, std::pair<std::string, TypeServerSource *>>
     TypeServerSource::instances;
 
-void lld::coff::clearTypeServerSourceInstances() {
+void clearTypeServerSourceInstances() {
   TypeServerSource::instances.clear();
 }
 

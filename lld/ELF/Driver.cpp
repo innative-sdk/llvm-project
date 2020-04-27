@@ -294,7 +294,7 @@ void LinkerDriver::iterateSymbols(void *state,
     (*iter)(state, s->getName().str().c_str());
 }
 
-bool lld::elf::iterateSymbols(const char *path, size_t size,
+bool iterateSymbols(const char *path, size_t size,
                               void (*iter)(void *, const char *), void *state,
                               std::tuple<uint8_t, uint16_t, uint8_t> settings,
                               llvm::raw_ostream &stdoutOS,

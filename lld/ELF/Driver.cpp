@@ -175,8 +175,8 @@ std::vector<std::pair<MemoryBufferRef, uint64_t>> static getArchiveMembers(
     v.push_back(std::make_pair(mbref, c.getChildOffset()));
   }
   if (err)
-    fatal(mb.getBufferIdentifier() + ": Archive::children failed: " +
-          toString(std::move(err)));
+    fatal(mb.getBufferIdentifier() +
+          ": Archive::children failed: " + toString(std::move(err)));
 
   // Take ownership of memory buffers created for members of thin archives.
   for (std::unique_ptr<MemoryBuffer> &mb : file->takeThinBuffers())
@@ -185,19 +185,13 @@ std::vector<std::pair<MemoryBufferRef, uint64_t>> static getArchiveMembers(
   return v;
 }
 
-// Opens a file and create a file object. Path has to be resolved already.
-void LinkerDriver::addFile(StringRef path, bool withLOption) {
-  using namespace sys::fs;
-
-  Optional<MemoryBufferRef> buffer = readFile(path);
-  if (!buffer.hasValue())
-    return;
-  MemoryBufferRef mbref = *buffer;
-
+void LinkerDriver::addMemoryBuffer(MemoryBufferRef mbref, bool withLOption) {
   if (config->formatBinary) {
     files.push_back(make<BinaryFile>(mbref));
     return;
   }
+
+  auto path = mbref.getBufferIdentifier();
 
   switch (identify_magic(mbref.getBuffer())) {
   case file_magic::unknown:
@@ -269,12 +263,86 @@ void LinkerDriver::addFile(StringRef path, bool withLOption) {
   }
 }
 
+// Opens a file and create a file object. Path has to be resolved already.
+void LinkerDriver::addFile(StringRef path, bool withLOption) {
+  using namespace sys::fs;
+
+  Optional<MemoryBufferRef> buffer = readFile(path);
+  if (!buffer.hasValue()) {
+    error(path + " could not be found or opened.");
+    return;
+  }
+  MemoryBufferRef mbref = *buffer;
+
+  addMemoryBuffer(mbref, withLOption);
+}
+
 // Add a given library by searching it from input search paths.
 void LinkerDriver::addLibrary(StringRef name) {
   if (Optional<std::string> path = searchLibrary(name))
     addFile(*path, /*withLOption=*/true);
   else
     error("unable to find library -l" + name);
+}
+
+void LinkerDriver::iterateSymbols(void *state,
+                                  void (*iter)(void *, const char *)) {
+  for (size_t i = 0; i < files.size(); ++i)
+    parseFile(files[i]);
+
+  for (auto s : symtab->symbols())
+    (*iter)(state, s->getName().str().c_str());
+}
+
+bool iterateSymbols(const char *path, size_t size,
+                              void (*iter)(void *, const char *), void *state,
+                              std::tuple<uint8_t, uint16_t, uint8_t> settings,
+                              llvm::raw_ostream &stdoutOS,
+                              llvm::raw_ostream &stderrOS) {
+  lld::stdoutOS = &stdoutOS;
+  lld::stderrOS = &stderrOS;
+
+  errorHandler().logName = args::getFilenameWithoutExe(path);
+  errorHandler().errorLimitExceededMsg =
+      "too many errors emitted, stopping now (use "
+      "-error-limit=0 to see all errors)";
+  errorHandler().exitEarly = false;
+  stderrOS.enable_colors(stderrOS.has_colors());
+
+  inputSections.clear();
+  outputSections.clear();
+  binaryFiles.clear();
+  bitcodeFiles.clear();
+  objectFiles.clear();
+  sharedFiles.clear();
+
+  config = make<Configuration>();
+  driver = make<LinkerDriver>();
+  script = make<LinkerScript>();
+  symtab = make<SymbolTable>();
+  config->ekind = ELFKind(std::get<0>(settings));
+  config->emachine = std::get<1>(settings);
+  config->osabi = std::get<2>(settings);
+
+  tar = nullptr;
+  memset(&in, 0, sizeof(in));
+
+  partitions = {Partition()};
+
+  SharedFile::vernauxNum = 0;
+
+  assert(symtab != 0);
+  if (!size)
+    driver->addFile(path, false);
+  else
+    driver->addMemoryBuffer(
+        MemoryBufferRef(StringRef(path, size), "in-memory buffer"), false);
+
+  driver->iterateSymbols(state, iter);
+
+  freeArena();
+
+  return true;
 }
 
 // This function is called on startup. We need this for LTO since
@@ -859,7 +927,8 @@ static void readConfigs(opt::InputArgList &args) {
   config->defineCommon = args.hasFlag(OPT_define_common, OPT_no_define_common,
                                       !args.hasArg(OPT_relocatable));
   config->demangle = args.hasFlag(OPT_demangle, OPT_no_demangle, true);
-  config->dependentLibraries = args.hasFlag(OPT_dependent_libraries, OPT_no_dependent_libraries, true);
+  config->dependentLibraries =
+      args.hasFlag(OPT_dependent_libraries, OPT_no_dependent_libraries, true);
   config->disableVerify = args.hasArg(OPT_disable_verify);
   config->discard = getDiscard(args);
   config->dwoDir = args.getLastArgValue(OPT_plugin_opt_dwo_dir_eq);
@@ -925,8 +994,7 @@ static void readConfigs(opt::InputArgList &args) {
       args.hasFlag(OPT_print_icf_sections, OPT_no_print_icf_sections, false);
   config->printGcSections =
       args.hasFlag(OPT_print_gc_sections, OPT_no_print_gc_sections, false);
-  config->printSymbolOrder =
-      args.getLastArgValue(OPT_print_symbol_order);
+  config->printSymbolOrder = args.getLastArgValue(OPT_print_symbol_order);
   config->rpath = getRpath(args);
   config->relocatable = args.hasArg(OPT_relocatable);
   config->saveTemps = args.hasArg(OPT_save_temps);
@@ -936,7 +1004,8 @@ static void readConfigs(opt::InputArgList &args) {
   config->singleRoRx = args.hasArg(OPT_no_rosegment);
   config->soName = args.getLastArgValue(OPT_soname);
   config->sortSection = getSortSection(args);
-  config->splitStackAdjustSize = args::getInteger(args, OPT_split_stack_adjust_size, 16384);
+  config->splitStackAdjustSize =
+      args::getInteger(args, OPT_split_stack_adjust_size, 16384);
   config->strip = getStrip(args);
   config->sysroot = args.getLastArgValue(OPT_sysroot);
   config->target1Rel = args.hasFlag(OPT_target1_rel, OPT_target1_abs, false);
@@ -1060,11 +1129,11 @@ static void readConfigs(opt::InputArgList &args) {
   std::tie(config->androidPackDynRelocs, config->relrPackDynRelocs) =
       getPackDynRelocs(args);
 
-  if (auto *arg = args.getLastArg(OPT_symbol_ordering_file)){
+  if (auto *arg = args.getLastArg(OPT_symbol_ordering_file)) {
     if (args.hasArg(OPT_call_graph_ordering_file))
       error("--symbol-ordering-file and --call-graph-order-file "
             "may not be used together");
-    if (Optional<MemoryBufferRef> buffer = readFile(arg->getValue())){
+    if (Optional<MemoryBufferRef> buffer = readFile(arg->getValue())) {
       config->symbolOrderingFile = getSymbolOrderingFile(*buffer);
       // Also need to disable CallGraphProfileSort to prevent
       // LLD order symbols with CGProfile
@@ -1269,7 +1338,8 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
         error("unbalanced --push-state/--pop-state");
         break;
       }
-      std::tie(config->asNeeded, config->isStatic, inWholeArchive) = stack.back();
+      std::tie(config->asNeeded, config->isStatic, inWholeArchive) =
+          stack.back();
       stack.pop_back();
       break;
     }
@@ -1963,10 +2033,12 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
   // Replace common symbols with regular symbols.
   replaceCommonSymbols();
 
-  // Split SHF_MERGE and .eh_frame sections into pieces in preparation for garbage collection.
+  // Split SHF_MERGE and .eh_frame sections into pieces in preparation for
+  // garbage collection.
   splitSections<ELFT>();
 
-  // Garbage collection and removal of shared symbols from unused shared objects.
+  // Garbage collection and removal of shared symbols from unused shared
+  // objects.
   markLive<ELFT>();
   demoteSharedSymbols();
 
@@ -2003,7 +2075,8 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
                  [](InputSectionBase *s) { return isa<MergeInputSection>(s); });
 
   // Two input sections with different output sections should not be folded.
-  // ICF runs after processSectionCommands() so that we know the output sections.
+  // ICF runs after processSectionCommands() so that we know the output
+  // sections.
   if (config->icf != ICFLevel::None) {
     findKeepUniqueSections<ELFT>(args);
     doIcf<ELFT>();

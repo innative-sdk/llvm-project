@@ -16,6 +16,9 @@ namespace lld {
 namespace coff {
 bool link(llvm::ArrayRef<const char *> args, bool canExitEarly,
           llvm::raw_ostream &stdoutOS, llvm::raw_ostream &stderrOS);
+bool iterateSymbols(const char *path, size_t size,
+                    void (*iter)(void *, const char *), void *state,
+                    llvm::raw_ostream &stdoutOS, llvm::raw_ostream &stderrOS);
 }
 
 namespace mingw {
@@ -26,6 +29,10 @@ bool link(llvm::ArrayRef<const char *> args, bool canExitEarly,
 namespace elf {
 bool link(llvm::ArrayRef<const char *> args, bool canExitEarly,
           llvm::raw_ostream &stdoutOS, llvm::raw_ostream &stderrOS);
+bool iterateSymbols(const char *path, size_t size,
+                    void (*iter)(void *, const char *), void *state,
+                    std::tuple<uint8_t, uint16_t, uint8_t> settings,
+                    llvm::raw_ostream &stdoutOS, llvm::raw_ostream &stderrOS);
 }
 
 namespace mach_o {
